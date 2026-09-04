@@ -1,9 +1,16 @@
 import { z } from "zod";
-import { AIInvestigation, Attempt, ReviewDecisionType } from "@/types";
+import { AIInvestigation, ReviewDecisionType } from "@/types";
+import { AttemptRepository } from "@/services/repositories/attempt-repository";
+import { EventRepository } from "@/services/repositories/event-repository";
+import { EpisodeRepository } from "@/services/repositories/episode-repository";
+import { RiskRepository } from "@/services/repositories/risk-repository";
+import { InvestigationRepository } from "@/services/repositories/investigation-repository";
 import { db } from "@/lib/db";
+import crypto from "crypto";
 
 const GeminiInvestigationSchema = z.object({
-  summary: z.string(),
+  investigation_summary: z.string().optional(),
+  summary: z.string().optional(),
   key_findings: z.array(z.string()),
   correlated_evidence: z.array(
     z.object({
@@ -13,39 +20,34 @@ const GeminiInvestigationSchema = z.object({
     })
   ),
   timeline_interpretation: z.string(),
-  alternative_explanations: z.array(z.string()),
+  possible_alternative_explanations: z.array(z.string()).optional(),
+  alternative_explanations: z.array(z.string()).optional(),
   risk_factors: z.array(z.string()),
-  recommended_action: z.enum(["NO_ACTION", "NEEDS_MORE_REVIEW", "POLICY_VIOLATION", "DISMISSED"]),
+  recommended_review_action: z.enum(["NO_ACTION", "NEEDS_MORE_REVIEW", "POLICY_VIOLATION", "DISMISSED"]).optional(),
+  recommended_action: z.enum(["NO_ACTION", "NEEDS_MORE_REVIEW", "POLICY_VIOLATION", "DISMISSED"]).optional(),
   confidence_notes: z.string(),
 });
 
 export async function runGeminiInvestigation(attemptId: string): Promise<AIInvestigation> {
-  const attempt = db.attempts.get(attemptId);
-  const exam = attempt ? db.exams.get(attempt.exam_id) : null;
-  const student = attempt ? db.profiles.get(attempt.student_id) : null;
-  const events = db.security_events.filter((e) => e.attempt_id === attemptId);
-  const episodes = Array.from(db.suspicious_episodes.values()).filter((ep) => ep.attempt_id === attemptId);
-  const risk = db.risk_assessments.get(attemptId);
+  const attempt = await AttemptRepository.getAttemptById(attemptId);
+  const events = await EventRepository.getEventsForAttempt(attemptId);
+  const episodes = await EpisodeRepository.getEpisodesForAttempt(attemptId);
+  const risk = await RiskRepository.getRiskAssessment(attemptId);
   const mlPred = db.ml_predictions.get(attemptId);
 
   const apiKey = process.env.GEMINI_API_KEY;
 
-  // If already investigated, return cached copy unless requested to re-run
-  if (db.ai_investigations.has(attemptId) && !apiKey) {
-    return db.ai_investigations.get(attemptId)!;
-  }
-
-  // Structured Evidence Context Snapshot
+  // Structured Evidence Context Snapshot (Minimizing unnecessary PII)
   const evidenceSnapshot = {
     candidate: {
-      id: student?.id,
-      name: student?.full_name,
-      role: student?.role,
+      id: attempt?.student?.id,
+      name: attempt?.student?.full_name,
+      role: attempt?.student?.role,
     },
     exam: {
-      id: exam?.id,
-      title: exam?.title,
-      duration_minutes: exam?.duration_minutes,
+      id: attempt?.exam?.id,
+      title: attempt?.exam?.title,
+      duration_minutes: attempt?.exam?.duration_minutes,
     },
     attempt: {
       id: attempt?.id,
@@ -56,9 +58,10 @@ export async function runGeminiInvestigation(attemptId: string): Promise<AIInves
       evidence_confidence: risk?.evidence_confidence ?? attempt?.evidence_confidence,
     },
     ml_analysis: {
-      model: mlPred?.model_name,
-      anomaly_score: mlPred?.anomaly_score,
-      normalized_score: mlPred?.normalized_score,
+      model: mlPred?.model_name || "IsolationForest-BehavioralAnomaly",
+      anomaly_score: mlPred?.anomaly_score ?? null,
+      normalized_score: mlPred?.normalized_score ?? null,
+      dataset_notice: "Prototype evaluation on synthetic behavioral data.",
     },
     suspicious_episodes: episodes.map((ep) => ({
       id: ep.id,
@@ -68,7 +71,7 @@ export async function runGeminiInvestigation(attemptId: string): Promise<AIInves
       summary: ep.summary,
       confidence: ep.evidence_confidence,
     })),
-    security_events_sample: events.slice(-10).map((e) => ({
+    security_events_sample: events.slice(-12).map((e) => ({
       type: e.event_type,
       severity: e.severity,
       source: e.source,
@@ -78,80 +81,91 @@ export async function runGeminiInvestigation(attemptId: string): Promise<AIInves
     })),
   };
 
-  if (!apiKey) {
-    // Generate high-integrity structured baseline when API key is unconfigured
+  // When GEMINI_API_KEY is not configured: Return structured automated summary explicitly labeled
+  if (!apiKey || apiKey.trim() === "") {
+    const fallbackId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
     const fallbackInvestigation: AIInvestigation = {
-      id: `ai-${attemptId}-${Date.now()}`,
+      id: fallbackId,
       attempt_id: attemptId,
-      investigation_status: "COMPLETED",
+      investigation_status: "UNAVAILABLE",
       input_snapshot: evidenceSnapshot,
       summary: episodes.length > 0
-        ? `Aegis telemetry detected ${episodes.length} correlated suspicious episode(s) including '${episodes[0].episode_type}'. Telemetry exhibits anomalous tab and camera orientation shifts during active examination.`
-        : `Normal telemetry observed across ${events.length} security telemetry events. No correlated suspicious episodes detected.`,
+        ? `[Automated evidence summary — not generated by Gemini] Aegis telemetry recorded ${events.length} security signals with ${episodes.length} correlated suspicious episode(s) (e.g. '${episodes[0].episode_type}'). Connect GEMINI_API_KEY for deep LLM forensic synthesis.`
+        : `[Automated evidence summary — not generated by Gemini] Normal telemetry observed across ${events.length} security telemetry events. Connect GEMINI_API_KEY for deep LLM forensic synthesis.`,
       key_findings: episodes.length > 0
         ? [
-            `Recorded ${events.length} total browser and vision security telemetry signals.`,
-            `Identified ${episodes.length} temporal episode clusters indicating potential external distraction or reference lookup.`,
-            `ML Isolation Forest anomaly normalized score calculated at ${mlPred?.normalized_score ?? 0.5}.`,
+            `Recorded ${events.length} browser and computer-vision security events.`,
+            `Identified ${episodes.length} temporal episode clusters indicating potential external focus departure.`,
+            `Behavioral anomaly normalized index is ${(mlPred?.normalized_score ?? 0.5).toFixed(2)}.`,
           ]
-        : ["Telemetry consistent with uninterrupted candidate focus.", "No clipboard or window departure anomalies captured."],
+        : ["Telemetry consistent with focused exam completion.", "No clipboard or window departure anomalies captured."],
       correlated_evidence: episodes.map((ep) => ({
         timestamp: ep.started_at,
         signals: [ep.episode_type, `Severity: ${ep.severity}`],
         significance: ep.summary,
       })),
       timeline_interpretation: episodes.length > 0
-        ? `Events occurred within a focused temporal cluster lasting ${episodes[0].duration_seconds} seconds. Subsequent candidate dwell behavior normalized.`
-        : "Candidate progressed steadily across assigned questions without atypical dwell spikes.",
+        ? `Observed facts: Focus loss signals clustered in window lasting ${episodes[0].duration_seconds}s.`
+        : "Observed facts: Continuous single-tab session without extended idle gaps.",
       alternative_explanations: [
-        "Operating system background notification popup or anti-virus prompt.",
-        "Temporary lighting variation or webcam repositioning causing facial landmark loss.",
-        "Candidate shifted posture to read scratch paper notes.",
+        "System notification popup or operating system dialog.",
+        "Candidate looked at permitted physical scratch paper or desk notes.",
+        "Webcam repositioning or ambient room lighting variation.",
       ],
       risk_factors: episodes.map((ep) => ep.summary),
       recommended_action: (risk?.risk_score ?? 0) >= 60 ? "NEEDS_MORE_REVIEW" : "NO_ACTION",
-      confidence_notes: "Evaluated under deterministic baseline rules. Final academic determination resides exclusively with the human examiner.",
-      model_name: "aegis-deterministic-sentinel",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      confidence_notes: "Automated baseline summary. Gemini API key is not configured; status is UNAVAILABLE.",
+      model_name: "aegis-automated-rule-engine",
+      created_at: now,
+      updated_at: now,
     };
 
-    db.ai_investigations.set(attemptId, fallbackInvestigation);
+    await InvestigationRepository.saveInvestigation(fallbackInvestigation);
     return fallbackInvestigation;
   }
 
   // Call Google Gemini API
   try {
-    const prompt = `You are Aegis AI Investigation Assistant, an impartial examination integrity analyst.
-Your mandate is to assist human examiners by analyzing telemetry data.
-Rules:
+    const prompt = `You are Aegis AI Investigation Assistant, an impartial, objective examination integrity analyst.
+Your mandate is to assist human examiners by synthesizing telemetry data.
+
+CRITICAL RULES:
 1. Never invent events, timestamps, or scores.
-2. Never determine a final cheating verdict — you advise human examiners.
-3. Distinguish empirical facts from interpretations.
-4. Always provide plausible innocent alternative explanations (e.g. system notification, dual-monitor glitch, scratch paper use).
-5. Treat ML anomaly scores as signals, not proof.
-6. Return strictly valid JSON adhering to the schema below.
+2. Never determine a final cheating verdict — human examiners make all final academic decisions.
+3. Explicitly distinguish empirical "Observed facts" from "Interpretation".
+4. Always evaluate plausible alternative innocent explanations (e.g. system notifications, dual-monitor window defocus, scratch paper use, lighting shifts).
+5. Treat ML anomaly scores as statistical behavioral signals, not proof of misconduct.
+6. Return strictly valid JSON matching the schema below.
 
 JSON Schema:
 {
-  "summary": "Brief executive summary of telemetry",
-  "key_findings": ["string"],
-  "correlated_evidence": [{"timestamp": "string", "signals": ["string"], "significance": "string"}],
-  "timeline_interpretation": "Chronological assessment",
-  "alternative_explanations": ["string"],
+  "investigation_summary": "Concise executive overview of observed telemetry",
+  "key_findings": ["Fact 1", "Fact 2"],
+  "correlated_evidence": [{"timestamp": "ISO-8601", "signals": ["string"], "significance": "string"}],
+  "timeline_interpretation": "Chronological narrative distinguishing facts from interpretations",
+  "possible_alternative_explanations": ["Alternative 1", "Alternative 2"],
   "risk_factors": ["string"],
-  "recommended_action": "NO_ACTION" | "NEEDS_MORE_REVIEW" | "POLICY_VIOLATION" | "DISMISSED",
-  "confidence_notes": "Explanation of evidence strength and uncertainty"
+  "recommended_review_action": "NO_ACTION" | "NEEDS_MORE_REVIEW" | "POLICY_VIOLATION" | "DISMISSED",
+  "confidence_notes": "Explicit notes on evidence strength, missing signals, or potential ambiguity"
 }
 
 Telemetry Evidence:
 ${JSON.stringify(evidenceSnapshot, null, 2)}
 `;
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    // Support both Gemini 1.5 Flash and Gemini 2.0 Flash
+    const model = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15-second timeout
+
     const response = await fetch(geminiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
@@ -161,56 +175,66 @@ ${JSON.stringify(evidenceSnapshot, null, 2)}
       }),
     });
 
+    clearTimeout(timeout);
+
     if (!response.ok) {
-      throw new Error(`Gemini API returned status ${response.status}`);
+      throw new Error(`Gemini API returned HTTP status ${response.status}`);
     }
 
     const data = await response.json();
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      throw new Error("Gemini returned empty response payload");
+    }
+
     const parsed = JSON.parse(rawText);
     const validated = GeminiInvestigationSchema.parse(parsed);
 
+    const now = new Date().toISOString();
     const investigation: AIInvestigation = {
-      id: `ai-${attemptId}-${Date.now()}`,
+      id: crypto.randomUUID(),
       attempt_id: attemptId,
       investigation_status: "COMPLETED",
       input_snapshot: evidenceSnapshot,
-      summary: validated.summary,
+      summary: validated.investigation_summary || validated.summary || "Gemini investigation completed.",
       key_findings: validated.key_findings,
       correlated_evidence: validated.correlated_evidence,
       timeline_interpretation: validated.timeline_interpretation,
-      alternative_explanations: validated.alternative_explanations,
+      alternative_explanations: validated.possible_alternative_explanations || validated.alternative_explanations || [],
       risk_factors: validated.risk_factors,
-      recommended_action: validated.recommended_action as ReviewDecisionType,
+      recommended_action: (validated.recommended_review_action || validated.recommended_action || "NEEDS_MORE_REVIEW") as ReviewDecisionType,
       confidence_notes: validated.confidence_notes,
-      model_name: "gemini-1.5-flash",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      model_name: model,
+      created_at: now,
+      updated_at: now,
     };
 
-    db.ai_investigations.set(attemptId, investigation);
+    await InvestigationRepository.saveInvestigation(investigation);
     return investigation;
   } catch (err: any) {
-    console.error("Gemini investigation error:", err);
-    // If Gemini fails, fallback gracefully to deterministic report
-    const fallback: AIInvestigation = {
-      id: `ai-${attemptId}-${Date.now()}`,
+    console.error("Gemini investigation failed:", err.message);
+
+    // FIX GEMINI FAILURE SEMANTICS: DO NOT mark as COMPLETED. Mark as FAILED.
+    const now = new Date().toISOString();
+    const failureInvestigation: AIInvestigation = {
+      id: crypto.randomUUID(),
       attempt_id: attemptId,
-      investigation_status: "COMPLETED",
+      investigation_status: "FAILED",
       input_snapshot: evidenceSnapshot,
-      summary: "AI Investigation service encountered external API timeout; deterministic analysis applied.",
-      key_findings: ["Telemetry processed via local Aegis Sentinel rules engine."],
+      summary: `AI investigation unavailable. Error: ${err.message}. Retry when the service is available.`,
+      key_findings: ["Gemini API request failed or timed out."],
       correlated_evidence: [],
-      timeline_interpretation: "Telemetry analysis generated via local rule engine.",
-      alternative_explanations: ["Standard technical fallback occurred."],
+      timeline_interpretation: "Automated analysis unavailable due to external API communication error.",
+      alternative_explanations: ["External AI service network timeout or quota limit."],
       risk_factors: [],
       recommended_action: "NEEDS_MORE_REVIEW",
-      confidence_notes: "AI investigation service temporarily degraded; human review recommended.",
-      model_name: "gemini-1.5-flash-fallback",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      confidence_notes: "AI investigation service failed; please retry or rely on deterministic telemetry rules.",
+      model_name: "gemini-api-failed",
+      created_at: now,
+      updated_at: now,
     };
-    db.ai_investigations.set(attemptId, fallback);
-    return fallback;
+
+    await InvestigationRepository.saveInvestigation(failureInvestigation);
+    return failureInvestigation;
   }
 }

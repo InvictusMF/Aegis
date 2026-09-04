@@ -1,14 +1,15 @@
 import { db } from "@/lib/db";
-import { RiskAssessment, RiskBand, EvidenceConfidenceLevel } from "@/types";
+import { RiskAssessment, RiskBand, EvidenceConfidenceLevel, SecurityEvent } from "@/types";
+import { RiskRepository } from "@/services/repositories/risk-repository";
+import crypto from "crypto";
 
 export function calculateRiskAssessment(
   attemptId: string,
-  mlAnomalyNormalized?: number
+  mlAnomalyNormalized?: number,
+  eventsOverride?: SecurityEvent[]
 ): RiskAssessment {
-  const events = db.security_events.filter((e) => e.attempt_id === attemptId);
+  const events = eventsOverride || db.security_events.filter((e) => e.attempt_id === attemptId);
   const episodes = Array.from(db.suspicious_episodes.values()).filter((ep) => ep.attempt_id === attemptId);
-  const attempt = db.attempts.get(attemptId);
-  const answers = Array.from(db.attempt_answers.values()).filter((a) => a.attempt_id === attemptId);
 
   const factors: Array<{
     factor: string;
@@ -19,11 +20,11 @@ export function calculateRiskAssessment(
 
   let rawRisk = 0;
 
-  // 1. Evaluate Suspicious Episodes (highest priority explainable signal)
+  // 1. Evaluate Suspicious Episodes
   for (const ep of episodes) {
     let epWeight = ep.risk_contribution || 15;
     if (ep.status === "DISMISSED") {
-      continue; // Dismissed by examiner
+      continue;
     }
 
     // Contextual check: question difficulty mitigation
@@ -35,7 +36,7 @@ export function calculateRiskAssessment(
           factor: `Episode: ${ep.episode_type}`,
           weight: epWeight,
           description: ep.summary,
-          mitigating_context: "Question has HIGH difficulty rating; intellectual hesitation is common.",
+          mitigating_context: "Question has HIGH difficulty rating; intellectual dwell/hesitation is expected.",
         });
       } else {
         factors.push({
@@ -63,7 +64,7 @@ export function calculateRiskAssessment(
     factors.push({
       factor: "Uncorrelated Tab Switches",
       weight: w,
-      description: `${tabSwitches} browser tab switch event(s) recorded without immediate answer modification.`,
+      description: `${tabSwitches} browser tab departure event(s) recorded without immediate answer modification.`,
     });
   }
 
@@ -74,8 +75,8 @@ export function calculateRiskAssessment(
     factors.push({
       factor: "Repeated Facial Absence Signals",
       weight: w,
-      description: `${faceMissingEvents} camera frames without localized facial landmarks.`,
-      mitigating_context: "Could be camera angle shift or head posture.",
+      description: `${faceMissingEvents} camera telemetry instances without localized facial landmarks.`,
+      mitigating_context: "May represent legitimate head tilt or desk note inspection.",
     });
   }
 
@@ -86,7 +87,7 @@ export function calculateRiskAssessment(
     factors.push({
       factor: "Multiple Faces Detected in View",
       weight: w,
-      description: `${multipleFaces} incident(s) with secondary person detected by MediaPipe.`,
+      description: `${multipleFaces} incident(s) with secondary face presence detected by computer vision.`,
     });
   }
 
@@ -99,12 +100,11 @@ export function calculateRiskAssessment(
     factors.push({
       factor: "ML Isolation Forest Behavioral Outlier",
       weight: mlWeight,
-      description: `Attempt telemetry deviates into the ${Math.round(mlScore * 100)}th percentile of anomaly distribution.`,
+      description: `Attempt telemetry deviates into the ${Math.round(mlScore * 100)}th percentile of synthetic anomaly distribution.`,
     });
   }
 
   // 4. Temporal Risk Decay
-  // If no new events in the last 15 minutes, apply slight decay to prevent early single blip dominance
   if (events.length > 0) {
     const lastEventTime = new Date(events[events.length - 1].timestamp).getTime();
     const minutesSinceLast = (Date.now() - lastEventTime) / (60 * 1000);
@@ -119,17 +119,13 @@ export function calculateRiskAssessment(
     }
   }
 
-  // Normalize final risk score to [0, 100]
   const finalScore = Math.min(100, Math.max(0, Math.round(rawRisk)));
 
-  // Determine Risk Band
   let riskBand: RiskBand = "LOW";
   if (finalScore >= 80) riskBand = "CRITICAL";
   else if (finalScore >= 60) riskBand = "HIGH";
   else if (finalScore >= 30) riskBand = "MODERATE";
 
-  // Determine Evidence Confidence
-  // Evidence confidence increases with corroborating independent sources
   const distinctSources = new Set(events.map((e) => e.source)).size;
   let evidenceConfidence: EvidenceConfidenceLevel = "LOW";
 
@@ -139,8 +135,11 @@ export function calculateRiskAssessment(
     evidenceConfidence = "MODERATE";
   }
 
+  const assessmentId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
   const assessment: RiskAssessment = {
-    id: `ra-${attemptId}-${Date.now()}`,
+    id: assessmentId,
     attempt_id: attemptId,
     risk_score: finalScore,
     evidence_confidence: evidenceConfidence,
@@ -148,19 +147,13 @@ export function calculateRiskAssessment(
     factors,
     model_version: "aegis-isoforest-v1.0",
     engine_version: "aegis-risk-engine-v1.2",
-    calculated_at: new Date().toISOString(),
+    calculated_at: now,
   };
 
-  db.risk_assessments.set(attemptId, assessment);
-
-  // Update Attempt record in memory
-  if (attempt) {
-    attempt.risk_score = finalScore;
-    attempt.evidence_confidence = evidenceConfidence;
-    if (finalScore >= 60 && attempt.review_status === "NORMAL") {
-      attempt.review_status = "REVIEW_RECOMMENDED";
-    }
-  }
+  // Persist asynchronously via repository
+  RiskRepository.saveRiskAssessment(assessment).catch((err) => {
+    console.error("Async error saving risk assessment:", err);
+  });
 
   return assessment;
 }

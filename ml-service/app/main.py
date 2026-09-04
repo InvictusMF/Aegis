@@ -13,11 +13,18 @@ app = FastAPI(
     description="Isolation Forest inference and training service for examination behavioral telemetry.",
 )
 
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    os.getenv("NEXT_PUBLIC_APP_URL", "http://localhost:3000"),
+    os.getenv("ALLOWED_ORIGIN", "http://localhost:3000"),
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(set(allowed_origins)),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -91,24 +98,36 @@ def predict_anomaly(payload: FeaturePayload, authorized: bool = Depends(verify_s
         from ..training.train import FEATURE_NAMES
         features_expected = FEATURE_NAMES
 
-    # Build input vector in strict expected order
+    # Build input vector in strict expected order with explicit missingness handling
     vec = []
     missing = []
+    feature_status = {}
     for f in features_expected:
-        if f in payload.features:
-            vec.append(float(payload.features[f]))
+        if f in payload.features and payload.features[f] is not None:
+            val = float(payload.features[f])
+            vec.append(val)
+            feature_status[f] = "present"
         else:
             missing.append(f)
-            vec.append(0.0)
+            feature_status[f] = "missing_imputed"
+            # Domain-appropriate neutral baselines
+            if f == "avg_dwell_time_seconds":
+                vec.append(60.0)
+            elif f == "tamper_chain_integrity":
+                vec.append(1.0)
+            else:
+                vec.append(0.0)
 
     X = np.array([vec])
     raw_score = float(MODEL.decision_function(X)[0])
     pred = int(MODEL.predict(X)[0]) # -1 for anomaly, 1 for normal
 
     # Normalize score to [0.0, 1.0] where 1.0 is most anomalous
-    # Decision function returns negative for anomalies, positive for normal
-    # Typical range ~ [-0.3, 0.3]
     normalized_score = float(np.clip(0.5 - (raw_score / 0.4), 0.0, 1.0))
+
+    # Evidence confidence modifier based on feature completeness
+    missing_ratio = len(missing) / max(1, len(features_expected))
+    confidence_rating = "HIGH" if missing_ratio == 0 else ("MODERATE" if missing_ratio < 0.25 else "LOW")
 
     return PredictionResponse(
         attempt_id=payload.attempt_id,
@@ -120,9 +139,11 @@ def predict_anomaly(payload: FeaturePayload, authorized: bool = Depends(verify_s
         is_anomaly=(pred == -1),
         prediction_metadata={
             "features_evaluated": len(features_expected),
+            "features_missing": len(missing),
             "missing_imputed": missing,
+            "feature_confidence": confidence_rating,
             "raw_decision_value": raw_score,
-            "note": "Prototype evaluation on synthetic behavioral data.",
+            "dataset_notice": "Prototype evaluation on synthetic behavioral data.",
         },
     )
 

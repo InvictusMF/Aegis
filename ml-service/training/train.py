@@ -128,10 +128,16 @@ def train_isolation_forest(
     with open(meta_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
+    mlflow_status = {"status": "untracked", "reason": "mlflow not initialized"}
     try:
         import mlflow
+        os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
+        os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
+        tracking_dir = os.path.abspath(os.path.join(output_dir, "..", "mlruns"))
+        os.makedirs(tracking_dir, exist_ok=True)
+        mlflow.set_tracking_uri(f"file:{tracking_dir}")
         mlflow.set_experiment("aegis_behavioral_anomaly")
-        with mlflow.start_run(run_name="isolation_forest_v1"):
+        with mlflow.start_run(run_name="isolation_forest_v1") as run:
             mlflow.log_params({
                 "model": "IsolationForest",
                 "n_estimators": 100,
@@ -144,10 +150,23 @@ def train_isolation_forest(
             })
             mlflow.log_artifact(model_path)
             mlflow.log_artifact(meta_path)
+            mlflow_status = {
+                "status": "tracked",
+                "run_id": run.info.run_id,
+                "experiment_id": run.info.experiment_id,
+            }
     except Exception as e:
-        pass
+        print(f"[MLflow Warning] Tracking degraded or unavailable: {e}", flush=True)
+        mlflow_status = {
+            "status": "degraded",
+            "reason": str(e),
+        }
 
-    print(f"Training successfully completed. Model saved to {model_path}", flush=True)
+    metadata["mlflow_tracking"] = mlflow_status
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    print(f"Training successfully completed. Model saved to {model_path}. MLflow: {mlflow_status['status']}", flush=True)
     return metadata
 
 if __name__ == "__main__":

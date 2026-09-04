@@ -16,6 +16,7 @@ import {
   Accommodation,
   AuditLog,
 } from "@/types";
+import { computeEventHash } from "@/lib/security/evidence-chain";
 
 // In-Memory Real State Store initialized with complete realistic seed data
 // Persists mutations during application runtime and supports full CRUD queries.
@@ -315,7 +316,9 @@ class AegisDatabase {
       is_final: false,
     });
 
-    // 8. Security Events for Alex Mercer
+    // 8. Security Events for Alex Mercer (Calculated with authentic cryptographic SHA-256 chain)
+    const genesisHash = "0000000000000000000000000000000000000000000000000000000000000000";
+
     const se1: SecurityEvent = {
       id: "se000000-0000-0000-0000-000000000001",
       attempt_id: at2.id,
@@ -326,9 +329,10 @@ class AegisDatabase {
       duration_ms: 4200,
       metadata: { target: "external_window" },
       confidence: 0.95,
-      prev_hash: "0000000000000000000000000000000000000000000000000000000000000000",
-      curr_hash: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+      prev_hash: genesisHash,
     };
+    se1.curr_hash = computeEventHash(genesisHash, se1);
+
     const se2: SecurityEvent = {
       id: "se000000-0000-0000-0000-000000000002",
       attempt_id: at2.id,
@@ -339,9 +343,10 @@ class AegisDatabase {
       duration_ms: 3800,
       metadata: { document_hidden: true },
       confidence: 0.98,
-      prev_hash: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-      curr_hash: "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72",
+      prev_hash: se1.curr_hash,
     };
+    se2.curr_hash = computeEventHash(se1.curr_hash, se2);
+
     const se3: SecurityEvent = {
       id: "se000000-0000-0000-0000-000000000003",
       attempt_id: at2.id,
@@ -352,9 +357,10 @@ class AegisDatabase {
       duration_ms: 2900,
       metadata: { detection_confidence: 0.92 },
       confidence: 0.91,
-      prev_hash: "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72",
-      curr_hash: "2c6a465997d82643e032e178546473f5e6ff4f389390680692d41fb781caab62",
+      prev_hash: se2.curr_hash,
     };
+    se3.curr_hash = computeEventHash(se2.curr_hash, se3);
+
     const se4: SecurityEvent = {
       id: "se000000-0000-0000-0000-000000000004",
       attempt_id: at2.id,
@@ -365,9 +371,10 @@ class AegisDatabase {
       duration_ms: 0,
       metadata: { restored: true },
       confidence: 0.99,
-      prev_hash: "2c6a465997d82643e032e178546473f5e6ff4f389390680692d41fb781caab62",
-      curr_hash: "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969",
+      prev_hash: se3.curr_hash,
     };
+    se4.curr_hash = computeEventHash(se3.curr_hash, se4);
+
     const se5: SecurityEvent = {
       id: "se000000-0000-0000-0000-000000000005",
       attempt_id: at2.id,
@@ -378,9 +385,9 @@ class AegisDatabase {
       duration_ms: 0,
       metadata: { question_id: q2.id, old: "a", new: "d" },
       confidence: 1.0,
-      prev_hash: "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969",
-      curr_hash: "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+      prev_hash: se4.curr_hash,
     };
+    se5.curr_hash = computeEventHash(se4.curr_hash, se5);
 
     this.security_events.push(se1, se2, se3, se4, se5);
 

@@ -69,6 +69,7 @@ export interface Question {
   points: number;
   metadata?: Record<string, any>;
   created_at?: string;
+  updated_at?: string;
 }
 
 export interface ExamAssignment {
@@ -201,7 +202,7 @@ export interface MLPrediction {
 export interface AIInvestigation {
   id: string;
   attempt_id: string;
-  investigation_status: "COMPLETED" | "FAILED" | "IN_PROGRESS";
+  investigation_status: "COMPLETED" | "FAILED" | "IN_PROGRESS" | "UNAVAILABLE";
   input_snapshot?: Record<string, any>;
   summary: string;
   key_findings: string[];

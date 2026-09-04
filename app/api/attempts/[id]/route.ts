@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { AttemptRepository } from "@/services/repositories/attempt-repository";
+import { ExamRepository } from "@/services/repositories/exam-repository";
+import { AnswerRepository } from "@/services/repositories/answer-repository";
+import { EventRepository } from "@/services/repositories/event-repository";
+import { EpisodeRepository } from "@/services/repositories/episode-repository";
+import { RiskRepository } from "@/services/repositories/risk-repository";
+import { InvestigationRepository } from "@/services/repositories/investigation-repository";
+import { DecisionRepository } from "@/services/repositories/decision-repository";
 import { verifyEvidenceChain } from "@/lib/security/evidence-chain";
+import { db } from "@/lib/db";
 
 export async function GET(
   request: Request,
@@ -9,51 +17,30 @@ export async function GET(
 ) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const attempt = db.attempts.get(id);
 
+  const attempt = await AttemptRepository.getAttemptById(id);
   if (!attempt) {
     return NextResponse.json({ error: "Attempt not found" }, { status: 404 });
   }
 
   // Authorization check: Student can only view own attempt
   if (user?.role === "STUDENT" && attempt.student_id !== user.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    return NextResponse.json({ error: "Unauthorized access to attempt." }, { status: 403 });
   }
 
-  const student = db.profiles.get(attempt.student_id);
-  const exam = db.exams.get(attempt.exam_id);
-
-  // Retrieve questions for this exam
-  let questions = exam?.questions || [];
-  if (questions.length === 0 && exam) {
-    const qLinks = db.exam_questions.filter((eq) => eq.exam_id === exam.id);
-    questions = qLinks
-      .map((l) => db.questions.get(l.question_id))
-      .filter((q): q is NonNullable<typeof q> => !!q);
-  }
-
-  // Sanitize questions if student
-  const sanitizedQuestions = questions.map((q) => {
-    if (user?.role === "STUDENT" && attempt.status !== "SUBMITTED") {
-      const { correct_answer, explanation, ...sanitized } = q;
-      return sanitized;
-    }
-    return q;
-  });
-
-  const answers = Array.from(db.attempt_answers.values()).filter((a) => a.attempt_id === id);
-  const events = db.security_events
-    .filter((e) => e.attempt_id === id)
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const exam = await ExamRepository.getExamById(attempt.exam_id, user?.role || "STUDENT");
+  const answers = await AnswerRepository.getAnswersForAttempt(id);
+  const events = await EventRepository.getEventsForAttempt(id);
+  const episodes = await EpisodeRepository.getEpisodesForAttempt(id);
+  const riskAssessment = await RiskRepository.getRiskAssessment(id);
+  const aiInvestigation = await InvestigationRepository.getInvestigation(id);
+  const decision = await DecisionRepository.getDecisionForAttempt(id);
+  const mlPrediction = db.ml_predictions.get(id);
 
   const chainIntegrity = verifyEvidenceChain(events);
-  const episodes = Array.from(db.suspicious_episodes.values()).filter((ep) => ep.attempt_id === id);
-  const riskAssessment = db.risk_assessments.get(id);
-  const mlPrediction = db.ml_predictions.get(id);
-  const aiInvestigation = db.ai_investigations.get(id);
-  const decision = db.review_decisions.get(id);
 
   // Build Question Behavior Matrix
+  const questions = exam?.questions || [];
   const questionMatrix = questions.map((q) => {
     const ans = answers.find((a) => a.question_id === q.id);
     const relatedEvents = events.filter((e) => e.metadata?.question_id === q.id);
@@ -61,7 +48,7 @@ export async function GET(
 
     return {
       question_id: q.id,
-      question_text: q.question_text.slice(0, 80) + "...",
+      question_text: q.question_text.slice(0, 80) + (q.question_text.length > 80 ? "..." : ""),
       difficulty: q.difficulty,
       points: q.points,
       time_spent_seconds: ans?.time_spent_seconds || 0,
@@ -76,8 +63,7 @@ export async function GET(
   return NextResponse.json({
     attempt: {
       ...attempt,
-      student,
-      exam: exam ? { ...exam, questions: sanitizedQuestions } : undefined,
+      exam,
     },
     answers,
     events,

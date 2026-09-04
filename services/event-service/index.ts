@@ -1,6 +1,6 @@
-import { db } from "@/lib/db";
 import { SecurityEvent, SecurityEventType } from "@/types";
-import { computeEventHash } from "@/lib/security/evidence-chain";
+import { EventRepository } from "@/services/repositories/event-repository";
+import { AttemptRepository } from "@/services/repositories/attempt-repository";
 import { extractBehaviorFeatures } from "@/services/feature-service";
 import { correlateSuspiciousEpisodes } from "@/services/episode-service";
 import { requestMLPrediction } from "@/lib/ml/client";
@@ -23,56 +23,36 @@ export async function ingestSecurityEvent(params: IngestEventParams): Promise<{
   evidence_confidence: string;
   episodes_count: number;
 }> {
-  const attempt = db.attempts.get(params.attempt_id);
+  // 1. Authoritative verification of attempt & timer
+  const attempt = await AttemptRepository.getAttemptById(params.attempt_id);
   if (!attempt) {
     throw new Error(`Attempt ${params.attempt_id} not found`);
   }
 
-  // Server-authoritative timer check: Reject event if attempt has expired
-  const exam = db.exams.get(attempt.exam_id);
-  if (exam && attempt.started_at) {
+  if (attempt.status === "SUBMITTED" || attempt.status === "EXPIRED") {
+    throw new Error(`Cannot record event for attempt in ${attempt.status} status.`);
+  }
+
+  if (attempt.exam && attempt.started_at) {
     const elapsedMinutes = (Date.now() - new Date(attempt.started_at).getTime()) / (60 * 1000);
-    if (elapsedMinutes > exam.duration_minutes + 1) { // 1-minute grace margin for latency
-      attempt.status = "EXPIRED";
+    if (elapsedMinutes > attempt.exam.duration_minutes + 1) { // 1 min grace margin
       throw new Error("Attempt duration has expired; cannot record further telemetry.");
     }
   }
 
-  const timestamp = params.timestamp || new Date().toISOString();
-
-  // 1. Calculate tamper-evident cryptographic hash
-  const lastEvent = db.security_events
-    .filter((e) => e.attempt_id === params.attempt_id)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
-
-  const prevHash = lastEvent?.curr_hash || "0000000000000000000000000000000000000000000000000000000000000000";
-
-  const partialEvent = {
-    attempt_id: params.attempt_id,
-    event_type: params.event_type,
+  // 2. Persist event into PostgreSQL with cryptographic tamper-evident hash chaining
+  const event = await EventRepository.recordEvent({
+    attemptId: params.attempt_id,
+    eventType: params.event_type,
     severity: params.severity,
     source: params.source,
-    timestamp,
-    duration_ms: params.duration_ms || 0,
-    metadata: params.metadata || {},
-    confidence: params.confidence ?? 1.0,
-  };
+    timestamp: params.timestamp,
+    durationMs: params.duration_ms,
+    metadata: params.metadata,
+    confidence: params.confidence,
+  });
 
-  const currHash = computeEventHash(prevHash, partialEvent);
-
-  const event: SecurityEvent = {
-    id: `se-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-    ...partialEvent,
-    prev_hash: prevHash,
-    curr_hash: currHash,
-    created_at: new Date().toISOString(),
-  };
-
-  // 2. Persist event
-  db.security_events.push(event);
-  attempt.last_activity_at = timestamp;
-
-  // 3. Behavioral Feature Vector Extraction
+  // 3. Behavioral Feature Vector Extraction with verified chain integrity
   const features = extractBehaviorFeatures(params.attempt_id);
 
   // 4. Temporal Suspicious Episode Correlation
@@ -88,21 +68,11 @@ export async function ingestSecurityEvent(params: IngestEventParams): Promise<{
     });
     mlNormalized = mlPrediction.normalized_score;
   } catch (e) {
-    // ML fallback handled inside client
+    // Graceful degraded mode if ML microservice is unavailable
   }
 
-  // 6. Explainable Risk Assessment & Evidence Confidence
+  // 6. Explainable Aegis Risk Assessment & Evidence Confidence
   const riskAssessment = calculateRiskAssessment(params.attempt_id, mlNormalized);
-
-  // 7. Realtime Broadcast to connected Examiner Dashboards
-  db.broadcast("SECURITY_EVENT_INGESTED", {
-    attempt_id: params.attempt_id,
-    event,
-    risk_score: riskAssessment.risk_score,
-    risk_band: riskAssessment.risk_band,
-    evidence_confidence: riskAssessment.evidence_confidence,
-    episodes,
-  });
 
   return {
     event,

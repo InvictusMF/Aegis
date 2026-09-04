@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { AttemptRepository } from "@/services/repositories/attempt-repository";
+import { AuditRepository } from "@/services/repositories/audit-repository";
+import { db } from "@/lib/db";
 
 export async function POST(
   request: Request,
@@ -8,82 +10,53 @@ export async function POST(
 ) {
   const { id: attemptId } = await params;
   const user = await getCurrentUser();
-  const attempt = db.attempts.get(attemptId);
 
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized: Sign in required." }, { status: 401 });
+  }
+
+  const attempt = await AttemptRepository.getAttemptById(attemptId);
   if (!attempt) {
     return NextResponse.json({ error: "Attempt not found" }, { status: 404 });
   }
 
-  if (user?.role === "STUDENT" && attempt.student_id !== user.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  // Authorization check: student can only submit their own attempt
+  if (user.role === "STUDENT" && attempt.student_id !== user.id) {
+    return NextResponse.json({ error: "Unauthorized: Attempt mismatch." }, { status: 403 });
   }
 
   if (attempt.status === "SUBMITTED") {
-    return NextResponse.json({ error: "Attempt already submitted", attempt });
+    return NextResponse.json({ success: true, attempt, alreadySubmitted: true });
   }
 
-  // Calculate score based on actual correct answers
-  const exam = db.exams.get(attempt.exam_id);
-  const answers = Array.from(db.attempt_answers.values()).filter((a) => a.attempt_id === attemptId);
+  try {
+    const submittedAttempt = await AttemptRepository.submitAttempt(attemptId, attempt.student_id);
 
-  let earnedPoints = 0;
-  let totalPoints = 0;
+    await AuditRepository.logAction({
+      actorId: user.id,
+      action: "ATTEMPT_SUBMITTED",
+      entityType: "ATTEMPT",
+      entityId: attemptId,
+      metadata: {
+        score: submittedAttempt.score,
+        risk_score: submittedAttempt.risk_score,
+        evidence_confidence: submittedAttempt.evidence_confidence,
+      },
+    });
 
-  for (const q of db.questions.values()) {
-    // Check if question belongs to exam
-    const belongs =
-      exam?.questions?.some((eq) => eq.id === q.id) ||
-      db.exam_questions.some((eq) => eq.exam_id === attempt.exam_id && eq.question_id === q.id);
+    db.broadcast("ATTEMPT_SUBMITTED", {
+      attempt_id: attemptId,
+      score: submittedAttempt.score,
+      risk_score: submittedAttempt.risk_score,
+      review_status: submittedAttempt.review_status,
+    });
 
-    if (belongs) {
-      totalPoints += q.points;
-      const ans = answers.find((a) => a.question_id === q.id);
-      if (ans && q.correct_answer && ans.answer_value.trim().toLowerCase() === q.correct_answer.trim().toLowerCase()) {
-        earnedPoints += q.points;
-      }
-    }
+    return NextResponse.json({
+      success: true,
+      attempt: submittedAttempt,
+      score: submittedAttempt.score,
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || "Failed to submit attempt" }, { status: 400 });
   }
-
-  const finalScore = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
-
-  attempt.status = "SUBMITTED";
-  attempt.submitted_at = new Date().toISOString();
-  attempt.score = finalScore;
-  attempt.last_activity_at = new Date().toISOString();
-
-  // Review status prioritization
-  if (attempt.risk_score >= 60 && attempt.review_status === "NORMAL") {
-    attempt.review_status = "REVIEW_RECOMMENDED";
-  }
-
-  // Update assignment status
-  const assignmentKey = `ea-${attempt.exam_id}-${attempt.student_id}`;
-  if (db.exam_assignments.has(assignmentKey)) {
-    db.exam_assignments.get(assignmentKey)!.status = "COMPLETED";
-  }
-
-  db.audit_logs.push({
-    id: `al-${Date.now()}`,
-    actor_id: user?.id,
-    action: "ATTEMPT_SUBMITTED",
-    entity_type: "attempt",
-    entity_id: attemptId,
-    metadata: { score: finalScore, risk_score: attempt.risk_score },
-    created_at: new Date().toISOString(),
-  });
-
-  db.broadcast("ATTEMPT_SUBMITTED", {
-    attempt_id: attemptId,
-    score: finalScore,
-    risk_score: attempt.risk_score,
-    review_status: attempt.review_status,
-  });
-
-  return NextResponse.json({
-    success: true,
-    attempt,
-    score: finalScore,
-    earnedPoints,
-    totalPoints,
-  });
 }

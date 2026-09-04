@@ -27,5 +27,10 @@
   "score_min": -0.19537385433484034,
   "score_max": 0.19713693600203347,
   "score_mean": 0.12955793561627968,
-  "dataset_notice": "Prototype evaluation on synthetic behavioral data."
+  "dataset_notice": "Prototype evaluation on synthetic behavioral data.",
+  "mlflow_tracking": {
+    "status": "tracked",
+    "run_id": "4a8b6d507d10490481c98838fb799021",
+    "experiment_id": "557753111168145442"
+  }
 }

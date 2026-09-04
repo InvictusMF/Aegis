@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { AttemptRepository } from "@/services/repositories/attempt-repository";
+import { AnswerRepository } from "@/services/repositories/answer-repository";
 import { ingestSecurityEvent } from "@/services/event-service";
 
 export async function GET(
@@ -8,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const answers = Array.from(db.attempt_answers.values()).filter((a) => a.attempt_id === id);
+  const answers = await AnswerRepository.getAnswersForAttempt(id);
   return NextResponse.json({ answers });
 }
 
@@ -18,86 +19,61 @@ export async function POST(
 ) {
   const { id: attemptId } = await params;
   const user = await getCurrentUser();
-  const attempt = db.attempts.get(attemptId);
 
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const attempt = await AttemptRepository.getAttemptById(attemptId);
   if (!attempt) {
     return NextResponse.json({ error: "Attempt not found" }, { status: 404 });
   }
 
-  // Authorization check
-  if (user?.role === "STUDENT" && attempt.student_id !== user.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
-
-  // Server-authoritative timer expiry validation
-  const exam = db.exams.get(attempt.exam_id);
-  if (exam && attempt.started_at) {
-    const elapsedMinutes = (Date.now() - new Date(attempt.started_at).getTime()) / (60 * 1000);
-    if (elapsedMinutes > exam.duration_minutes + 1) {
-      attempt.status = "EXPIRED";
-      return NextResponse.json(
-        { error: "Exam time limit has expired. Submission is closed.", expired: true },
-        { status: 403 }
-      );
-    }
+  // Authorization check: student can only save own answers
+  if (user.role === "STUDENT" && attempt.student_id !== user.id) {
+    return NextResponse.json({ error: "Unauthorized: Attempt mismatch." }, { status: 403 });
   }
 
   try {
     const body = await request.json();
     const { question_id, answer_value, time_spent_delta = 0 } = body;
 
-    const answerKey = `ans-${attemptId}-${question_id}`;
-    let existing = db.attempt_answers.get(answerKey);
-
-    const isChanged = existing && existing.answer_value !== answer_value;
-
-    if (!existing) {
-      existing = {
-        id: answerKey,
-        attempt_id: attemptId,
-        question_id,
-        answer_value,
-        first_answered_at: new Date().toISOString(),
-        last_answered_at: new Date().toISOString(),
-        change_count: 0,
-        time_spent_seconds: time_spent_delta,
-        is_final: false,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      db.attempt_answers.set(answerKey, existing);
-    } else {
-      const prevVal = existing.answer_value;
-      existing.answer_value = answer_value;
-      existing.last_answered_at = new Date().toISOString();
-      if (isChanged) {
-        existing.change_count += 1;
-      }
-      existing.time_spent_seconds += time_spent_delta;
-      existing.updated_at = new Date().toISOString();
-
-      // Trigger telemetry signal for answer mutation
-      if (isChanged) {
-        await ingestSecurityEvent({
-          attempt_id: attemptId,
-          event_type: "ANSWER_CHANGED",
-          severity: "HIGH",
-          source: "BEHAVIORAL_METRIC",
-          metadata: {
-            question_id,
-            old_value: prevVal,
-            new_value: answer_value,
-            change_count: existing.change_count,
-          },
-          confidence: 1.0,
-        });
-      }
+    if (!question_id) {
+      return NextResponse.json({ error: "question_id is required" }, { status: 400 });
     }
 
-    attempt.last_activity_at = new Date().toISOString();
+    // Check previous answer to detect mutations
+    const existingAnswers = await AnswerRepository.getAnswersForAttempt(attemptId);
+    const existing = existingAnswers.find((a) => a.question_id === question_id);
+    const isChanged = existing && existing.answer_value !== answer_value;
 
-    return NextResponse.json({ success: true, answer: existing });
+    const savedAnswer = await AnswerRepository.saveAnswer({
+      attemptId,
+      studentId: attempt.student_id,
+      questionId: question_id,
+      answerValue: answer_value,
+      timeSpentSeconds: time_spent_delta,
+    });
+
+    // Ingest telemetry event on answer modification
+    if (isChanged) {
+      ingestSecurityEvent({
+        attempt_id: attemptId,
+        event_type: "ANSWER_CHANGED",
+        severity: "HIGH",
+        source: "BEHAVIORAL_METRIC",
+        metadata: {
+          question_id,
+          old_value: existing.answer_value,
+          new_value: answer_value,
+          change_count: savedAnswer.change_count,
+        },
+        confidence: 1.0,
+      }).catch((e) => console.error("Error ingesting answer changed event:", e));
+    }
+
+    return NextResponse.json({ success: true, answer: savedAnswer });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to save answer" }, { status: 500 });
+    return NextResponse.json({ error: err.message || "Failed to persist answer" }, { status: 400 });
   }
 }

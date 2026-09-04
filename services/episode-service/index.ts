@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
 import { SecurityEvent, SuspiciousEpisode, EvidenceConfidenceLevel } from "@/types";
+import { EpisodeRepository } from "@/services/repositories/episode-repository";
+import crypto from "crypto";
 
 interface EpisodeCluster {
   events: SecurityEvent[];
@@ -7,16 +9,16 @@ interface EpisodeCluster {
   endTime: number;
 }
 
-export function correlateSuspiciousEpisodes(attemptId: string): SuspiciousEpisode[] {
-  const events = db.security_events
-    .filter((e) => e.attempt_id === attemptId)
+export function correlateSuspiciousEpisodes(attemptId: string, eventsOverride?: SecurityEvent[]): SuspiciousEpisode[] {
+  const events = (eventsOverride || db.security_events.filter((e) => e.attempt_id === attemptId))
+    .slice()
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   if (events.length === 0) {
     return [];
   }
 
-  // Filter events of significance (ignore standalone low focus gained without prior blur)
+  // Filter events of significance
   const significantEvents = events.filter((e) => {
     return (
       e.event_type === "TAB_SWITCH" ||
@@ -128,11 +130,15 @@ export function correlateSuspiciousEpisodes(attemptId: string): SuspiciousEpisod
       summary = `Cluster of ${cluster.events.length} telemetry signals observed during attempt.`;
     }
 
-    const episodeId = `ep-${attemptId}-${idx + 1}`;
+    // Deterministic UUID for repeatable idempotency based on attempt and cluster start time
+    const hash = crypto.createHash("sha256").update(`${attemptId}:${cluster.startTime}:${episodeType}`).digest("hex");
+    const deterministicUUID = `${hash.substring(0, 8)}-${hash.substring(8, 12)}-4${hash.substring(13, 16)}-a${hash.substring(17, 20)}-${hash.substring(20, 32)}`;
+
     const durationSec = Math.max(1, Math.round((cluster.endTime - cluster.startTime) / 1000));
+    const now = new Date().toISOString();
 
     const episode: SuspiciousEpisode = {
-      id: episodeId,
+      id: deterministicUUID,
       attempt_id: attemptId,
       started_at: new Date(cluster.startTime).toISOString(),
       ended_at: new Date(cluster.endTime).toISOString(),
@@ -145,13 +151,17 @@ export function correlateSuspiciousEpisodes(attemptId: string): SuspiciousEpisod
       status: "OPEN",
       question_id: questionId,
       contributing_event_ids: cluster.events.map((e) => e.id),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: now,
+      updated_at: now,
     };
 
-    db.suspicious_episodes.set(episode.id, episode);
     generatedEpisodes.push(episode);
   }
+
+  // Persist asynchronously via repository
+  EpisodeRepository.saveEpisodes(generatedEpisodes).catch((err) => {
+    console.error("Async error saving episodes:", err);
+  });
 
   return generatedEpisodes;
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Attempt } from "@/types";
 import { formatTime, getRiskColor, getConfidenceBadge } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import {
   Eye,
   Camera,
@@ -35,11 +36,33 @@ export default function LiveMonitoringWallPage() {
 
   useEffect(() => {
     loadAttempts();
+
+    const supabase = createClient();
+    let channel: any = null;
+
+    if (supabase) {
+      channel = supabase
+        .channel("public:live-wall")
+        .on("postgres_changes", { event: "*", schema: "public", table: "security_events" }, () => {
+          loadAttempts();
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "attempts" }, () => {
+          loadAttempts();
+        })
+        .subscribe();
+    }
+
     const es = new EventSource("/api/realtime");
     es.onmessage = () => {
       loadAttempts();
     };
-    return () => es.close();
+
+    return () => {
+      es.close();
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+    };
   }, []);
 
   return (

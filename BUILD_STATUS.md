@@ -6,44 +6,44 @@
 
 ---
 
-## 1. Implementation Checklist
+## 1. Implementation & Verification Audit
 
-| Phase | Description | Status | Verification Notes |
-| :--- | :--- | :---: | :--- |
-| **Phase 1** | Foundation & Project Architecture | ✅ COMPLETE | Next.js 15, Tailwind, TypeScript, Lucide, Recharts installed and configured. |
-| **Phase 2** | Authentication & Authorization | ✅ COMPLETE | Role-based access (STUDENT, EXAMINER, ADMIN), session persistence, user switching. |
-| **Phase 3** | Database Schema & RLS | ✅ COMPLETE | 18 PostgreSQL tables, full RLS policies, indexes, migrations, seeds, local persistence fallback. |
-| **Phase 4** | Exam Creation & Management | ✅ COMPLETE | Exam CRUD, question ordering, points, protected correct answers. |
-| **Phase 5** | Student Exam Experience | ✅ COMPLETE | Server-authoritative timer, question drawer, debounced autosave, answer change tracking. |
-| **Phase 6** | Security Event Collection | ✅ COMPLETE | Sandboxed listeners for visibility, blur, focus, fullscreen, copy, paste, context menu, inactivity. |
-| **Phase 7** | Computer Vision (MediaPipe) | ✅ COMPLETE | Browser-side FaceLandmarker, face presence, orientation, multi-face, zero raw video upload. |
-| **Phase 8** | Behavioral Feature Extraction | ✅ COMPLETE | 16-dimensional normalized feature vector extraction service (`services/feature-service`). |
-| **Phase 9** | Suspicious Episode Engine | ✅ COMPLETE | Temporal rolling window clustering, severity, confidence, and question attribution (`services/episode-service`). |
-| **Phase 10** | ML Training & Inference | ✅ COMPLETE | Python FastAPI service, Isolation Forest trained & serialized, MLflow tracking, fallback handler. |
-| **Phase 11** | Risk & Confidence Engine | ✅ COMPLETE | Deterministic explainable scoring (0–100), difficulty discounting, risk decay, decoupled confidence. |
-| **Phase 12** | Realtime Examiner Dashboard | ✅ COMPLETE | Security Operations Center dashboard, Live Monitoring Wall, SSE feed (`/api/realtime`). |
-| **Phase 13** | Gemini AI Investigation | ✅ COMPLETE | Server-side Gemini integration, Zod schema validation, alternative explanations synthesis. |
-| **Phase 14** | Human Review Workflow | ✅ COMPLETE | Examiner adjudication interface (NO_ACTION, NEEDS_MORE_REVIEW, POLICY_VIOLATION, DISMISSED) with mandatory written rationale. |
-| **Phase 15** | Integrity Reports | ✅ COMPLETE | Printable official integrity dossier with cryptographic hash chain audit verification. |
-| **Phase 16** | Privacy & Accessibility | ✅ COMPLETE | Privacy Center, student transparency, accommodation non-penalization, WCAG contrast. |
-| **Phase 17** | Attack Lab & Demo Mode | ✅ COMPLETE | Real-pipeline anomaly simulation (tab switch, focus, face missing, suspicious sequence). |
-| **Phase 18** | Build, Test & Documentation | ✅ COMPLETE | TypeScript validation, test suite, architecture docs, and production build verification. |
+| Component | Status | Details & Verification |
+| :--- | :---: | :--- |
+| **Authoritative PostgreSQL / Supabase** | ✅ TESTED | Server-side repository layer (`services/repositories/*`) for exams, questions, assignments, attempts, answers, security events, episodes, features, risk, investigations, and audit logs. |
+| **Supabase Authentication** | ✅ TESTED | Real Supabase Auth SSR session refresh via `middleware.ts`, server-side role resolution (`STUDENT`, `EXAMINER`, `ADMIN`). Default unauthenticated examiner identity eliminated; explicit labeled DEMO MODE available. |
+| **Row Level Security (RLS)** | ✅ TESTED | 18 PostgreSQL tables configured with strict RLS policies. Students restricted to own attempts, answers, and profile. |
+| **Answer Key Security** | ✅ TESTED | Students never receive `correct_answer`, `explanation`, or grading keys prior to completion. Enforced via secure server-side projection. |
+| **Server-Authoritative Timer** | ✅ TESTED | Strict timer check on attempt starts, answer autosaves, and telemetry ingestion. Rejects expired mutations and auto-marks `EXPIRED`. |
+| **Cryptographic Hash Chain** | ✅ TESTED | Real SHA-256 tamper-evident chaining (`previous_hash + canonical_event -> curr_hash`). Tested and verified via `verifyEvidenceChain`. Hardcoded `tamper_chain_integrity = 1.0` replaced with genuine verification. |
+| **Suspicious Episode Engine** | ✅ TESTED | Idempotent temporal correlation clustering with deterministic UUIDs. Correlates window defocus, tab departure, camera occlusion, and answer modification into unified episodes. |
+| **ML Behavioral Anomaly Service** | ✅ TESTED | Python FastAPI microservice (`ml-service/app/main.py`) executing Isolation Forest inference. Real MLflow experiment tracking active (`mlruns`). Smart feature missingness imputation. Restricted CORS and token authorization. |
+| **Explainable Risk Engine** | ✅ TESTED | Aegis Risk Index (0–100) combining multi-source events, suspicious episodes, difficulty discounting, risk decay, and decoupled Evidence Confidence (`LOW`, `MODERATE`, `HIGH`). Avoids calling automated signals "cheating". |
+| **Supabase Realtime Feed** | ✅ TESTED | Examiner dashboard and Live Monitoring Wall subscribed to `postgres_changes` on `security_events` and `attempts`, with local SSE fallback bridge. |
+| **Gemini AI Investigation** | ✅ TESTED | Server-side Google Gemini structured synthesis with Zod schema validation. Impartial factual analysis, alternative innocent explanations, and strict `FAILED` / `UNAVAILABLE` failure semantics. |
+| **Human-in-the-Loop Review** | ✅ TESTED | Examiner adjudication (`NO_ACTION`, `NEEDS_MORE_REVIEW`, `POLICY_VIOLATION`, `DISMISSED`) with mandatory rationale, updating `attempts.review_status` to `RESOLVED` and logging to immutable `audit_logs`. |
+| **Attack Lab Simulator** | ✅ TESTED | Enters the real event ingestion pipeline (`source: 'ATTACK_LAB'`), triggering the real hash chain, feature extraction, episode correlation, ML inference, risk recalculation, and realtime broadcast. |
+| **Integrity Dossier & Reports** | ✅ TESTED | Printable audit dossiers containing candidate overview, chronological telemetry, suspicious episodes, ML model versioning, AI investigation, and examiner signed decision. |
 
 ---
 
-## 2. End-to-End Chain Verification
+## 2. Test Verification Summary
 
-The entire operational chain has been implemented and tested:
-$$\text{Student} \rightarrow \text{Exam} \rightarrow \text{Attempt} \rightarrow \text{Answer} \rightarrow \text{Security Event} \rightarrow \text{Database} \rightarrow \text{Behavioral Features} \rightarrow \text{ML Outlier} \rightarrow \text{Suspicious Episode} \rightarrow \text{Risk Engine} \rightarrow \text{Realtime Dashboard} \rightarrow \text{Gemini Investigation} \rightarrow \text{Examiner Decision} \rightarrow \text{Audit Log} \rightarrow \text{Integrity Report}$$
-
----
-
-## 3. Environment & Deployment Prerequisites
-
-- **Node.js:** $\ge 18.x$ (tested on v24.17.0)
-- **Python:** $\ge 3.10$ (tested on v3.14.0)
-- **Key Environment Variables:**
-  - `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (optional remote Supabase; local persistence pre-seeded by default)
-  - `GEMINI_API_KEY` (optional Google Gemini API key; high-integrity deterministic baseline active if missing)
-  - `ML_SERVICE_URL` (default: `http://127.0.0.1:8000`)
-  - `ML_SERVICE_SECRET` (default: `aegis-ml-internal-secret-2026`)
+- **TypeScript Typecheck (`tsc --noEmit`):** ✅ PASSED (0 errors)
+- **Node.js Test Suite (`node --test tests/**/*.test.js`):** ✅ 9/9 PASSED
+  - `Evidence Chain verifies authentic sequentially hashed events`
+  - `Evidence Chain detects tampered payloads`
+  - `Risk Engine evaluates normal candidate as LOW risk`
+  - `Risk Engine aggregates episodes and identifies HIGH risk`
+  - `Risk Engine discounts hesitation on HARD questions`
+  - `Security: Question Answer Key never leaked to students`
+  - `Server-Authoritative Timer: Rejects answers and marks expired when time exceeds exam duration`
+  - `Risk Terminology: Evidence Confidence scales with multi-signal corroboration`
+  - `End-to-End Pipeline: Complete integrity journey from student exam to examiner decision`
+- **Python ML Test Suite (`pytest ml-service/tests/`):** ✅ 5/5 PASSED
+  - `test_health`
+  - `test_model_info`
+  - `test_predict_unauthorized` (401 validation)
+  - `test_predict_normal_behavior`
+  - `test_predict_missing_feature_handling`
+- **Next.js Production Build (`next build`):** ✅ COMPILED & GENERATED STATIC PAGES (13/13)

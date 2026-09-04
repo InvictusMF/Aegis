@@ -18,6 +18,8 @@ import {
   Clock,
 } from "lucide-react";
 
+import { createClient } from "@/lib/supabase/client";
+
 export default function ExaminerDashboardPage() {
   const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,13 +40,38 @@ export default function ExaminerDashboardPage() {
   useEffect(() => {
     fetchAttempts();
 
-    // Connect to Server-Sent Events (SSE) Realtime feed
+    // 1. Supabase Realtime Channel
+    const supabase = createClient();
+    let channel: any = null;
+
+    if (supabase) {
+      channel = supabase
+        .channel("public:telemetry-feed")
+        .on("postgres_changes", { event: "*", schema: "public", table: "security_events" }, (payload: any) => {
+          setRealtimeLogs((prev) => [
+            {
+              id: Date.now(),
+              type: "SECURITY_EVENT_INGESTED",
+              time: new Date().toLocaleTimeString(),
+              payload: payload.new,
+            },
+            ...prev.slice(0, 7),
+          ]);
+          fetchAttempts();
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "attempts" }, () => {
+          fetchAttempts();
+        })
+        .subscribe();
+    }
+
+    // 2. Server-Sent Events (SSE) Fallback/Local Bridge
     const es = new EventSource("/api/realtime");
 
     es.onmessage = (e) => {
       try {
         const parsed = JSON.parse(e.data);
-        if (parsed.type === "SECURITY_EVENT_INGESTED" || parsed.type === "REVIEW_DECISION_SUBMITTED" || parsed.type === "ATTEMPT_SUBMITTED") {
+        if (parsed.type === "SECURITY_EVENT_INGESTED" || parsed.type === "REVIEW_DECISION_SUBMITTED" || parsed.type === "ATTEMPT_SUBMITTED" || parsed.type === "RISK_ASSESSMENT_UPDATED") {
           setRealtimeLogs((prev) => [
             {
               id: Date.now(),
@@ -61,7 +88,12 @@ export default function ExaminerDashboardPage() {
       }
     };
 
-    return () => es.close();
+    return () => {
+      es.close();
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+    };
   }, []);
 
   const totalAttempts = attempts.length;
