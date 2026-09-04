@@ -82,7 +82,7 @@ export class AttemptRepository {
    * Uses real database assignment verification (no synthetic ea-... keys!).
    * Enforces server-authoritative timer.
    */
-  static async startAttempt(examId: string, studentId: string): Promise<Attempt> {
+  static async startAttempt(examId: string, studentId: string, forceRestart: boolean = false): Promise<Attempt> {
     const supabase = getServiceSupabase();
     const now = new Date().toISOString();
 
@@ -120,6 +120,17 @@ export class AttemptRepository {
         .single();
 
       if (existing) {
+        if (forceRestart) {
+          await supabase
+            .from("attempts")
+            .update({ status: "IN_PROGRESS", started_at: now, submitted_at: null })
+            .eq("id", existing.id);
+          existing.status = "IN_PROGRESS";
+          existing.started_at = now;
+          existing.submitted_at = null as any;
+          return existing;
+        }
+
         // If already submitted or expired, reject restarting
         if (existing.status === "SUBMITTED" || existing.status === "EXPIRED") {
           return existing;
@@ -186,6 +197,12 @@ export class AttemptRepository {
     }
 
     if (existingAttempt) {
+      if (forceRestart) {
+        existingAttempt.status = "IN_PROGRESS";
+        existingAttempt.started_at = now;
+        existingAttempt.submitted_at = undefined;
+        return existingAttempt;
+      }
       if (existingAttempt.status === "SUBMITTED" || existingAttempt.status === "EXPIRED") {
         return existingAttempt;
       }

@@ -32,25 +32,26 @@ export function formatDuration(seconds: number): string {
 export function getRiskColor(band: string) {
   switch (band) {
     case "CRITICAL":
-      return { text: "text-rose-400", bg: "bg-rose-500/10", border: "border-rose-500/30" };
+      return { text: "text-rose-700", bg: "bg-rose-50", border: "border-rose-200", dot: "bg-rose-600" };
     case "HIGH":
-      return { text: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30" };
+      return { text: "text-orange-700", bg: "bg-orange-50", border: "border-orange-200", dot: "bg-orange-500" };
     case "MODERATE":
-      return { text: "text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/30" };
+      return { text: "text-amber-800", bg: "bg-amber-50", border: "border-amber-200", dot: "bg-amber-500" };
     case "LOW":
     default:
-      return { text: "text-emerald-400", bg: "bg-emerald-500/10", border: "border-emerald-500/30" };
+      return { text: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", dot: "bg-emerald-600" };
   }
 }
 
 export function getConfidenceBadge(confidence: string) {
   switch (confidence) {
+    case "VERY_HIGH":
     case "HIGH":
-      return { label: "High Confidence", text: "text-cyan-400", bg: "bg-cyan-500/10", border: "border-cyan-500/30" };
+      return { label: "High Confidence", text: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", dot: "bg-blue-600" };
     case "MODERATE":
-      return { label: "Moderate Confidence", text: "text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/30" };
+      return { label: "Moderate Confidence", text: "text-indigo-700", bg: "bg-indigo-50", border: "border-indigo-200", dot: "bg-indigo-500" };
     case "LOW":
     default:
-      return { label: "Low Confidence", text: "text-slate-400", bg: "bg-slate-500/10", border: "border-slate-500/30" };
+      return { label: "Low Confidence", text: "text-slate-600", bg: "bg-slate-100", border: "border-slate-200", dot: "bg-slate-400" };
   }
 }

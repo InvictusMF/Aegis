@@ -47,16 +47,17 @@ module.exports = {
           foreground: "hsl(var(--card-foreground))",
         },
         aegis: {
-          bg: "#080c14",
-          card: "#0f172a",
-          cardHover: "#17223b",
-          border: "#1e293b",
-          cyan: "#06b6d4",
-          cyanGlow: "rgba(6, 182, 212, 0.15)",
-          amber: "#f59e0b",
-          rose: "#f43f5e",
-          emerald: "#10b981",
-          purple: "#a855f7"
+          bg: "#f8fafc",
+          card: "#ffffff",
+          cardHover: "#f1f5f9",
+          border: "#e2e8f0",
+          navy: "#0f172a",
+          blue: "#2563eb",
+          teal: "#0d9488",
+          amber: "#d97706",
+          rose: "#dc2626",
+          emerald: "#059669",
+          slate: "#64748b"
         }
       },
       borderRadius: {

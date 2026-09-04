@@ -33,13 +33,13 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { exam_id } = body;
+    const { exam_id, restart } = body;
 
     if (!exam_id) {
       return NextResponse.json({ error: "exam_id is required" }, { status: 400 });
     }
 
-    const attempt = await AttemptRepository.startAttempt(exam_id, user.id);
+    const attempt = await AttemptRepository.startAttempt(exam_id, user.id, !!restart);
 
     await AuditRepository.logAction({
       actorId: user.id,

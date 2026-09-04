@@ -16,14 +16,22 @@ import {
   Terminal,
   Radio,
   Clock,
+  Search,
+  Filter,
+  CheckCircle2,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
-
 import { createClient } from "@/lib/supabase/client";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { StatCard } from "@/components/ui/StatCard";
 
 export default function ExaminerDashboardPage() {
   const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [realtimeLogs, setRealtimeLogs] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
 
   const fetchAttempts = async () => {
     try {
@@ -55,7 +63,7 @@ export default function ExaminerDashboardPage() {
               time: new Date().toLocaleTimeString(),
               payload: payload.new,
             },
-            ...prev.slice(0, 7),
+            ...prev.slice(0, 5),
           ]);
           fetchAttempts();
         })
@@ -71,7 +79,12 @@ export default function ExaminerDashboardPage() {
     es.onmessage = (e) => {
       try {
         const parsed = JSON.parse(e.data);
-        if (parsed.type === "SECURITY_EVENT_INGESTED" || parsed.type === "REVIEW_DECISION_SUBMITTED" || parsed.type === "ATTEMPT_SUBMITTED" || parsed.type === "RISK_ASSESSMENT_UPDATED") {
+        if (
+          parsed.type === "SECURITY_EVENT_INGESTED" ||
+          parsed.type === "REVIEW_DECISION_SUBMITTED" ||
+          parsed.type === "ATTEMPT_SUBMITTED" ||
+          parsed.type === "RISK_ASSESSMENT_UPDATED"
+        ) {
           setRealtimeLogs((prev) => [
             {
               id: Date.now(),
@@ -79,7 +92,7 @@ export default function ExaminerDashboardPage() {
               time: new Date().toLocaleTimeString(),
               payload: parsed.payload,
             },
-            ...prev.slice(0, 7),
+            ...prev.slice(0, 5),
           ]);
           fetchAttempts();
         }
@@ -99,210 +112,292 @@ export default function ExaminerDashboardPage() {
   const totalAttempts = attempts.length;
   const inProgress = attempts.filter((a) => a.status === "IN_PROGRESS").length;
   const highRisk = attempts.filter((a) => a.risk_score >= 60).length;
-  const underReview = attempts.filter((a) => a.review_status === "REVIEW_RECOMMENDED" || a.review_status === "UNDER_REVIEW").length;
+  const underReview = attempts.filter(
+    (a) => a.review_status === "REVIEW_RECOMMENDED" || a.review_status === "UNDER_REVIEW"
+  ).length;
+
+  const filteredAttempts = attempts.filter((a) => {
+    const matchesSearch =
+      a.student?.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      a.exam?.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      a.student?.email?.toLowerCase().includes(searchQuery.toLowerCase());
+
+    if (!matchesSearch) return false;
+    if (statusFilter === "HIGH_RISK") return a.risk_score >= 60;
+    if (statusFilter === "IN_PROGRESS") return a.status === "IN_PROGRESS";
+    if (statusFilter === "UNDER_REVIEW")
+      return a.review_status === "REVIEW_RECOMMENDED" || a.review_status === "UNDER_REVIEW";
+    return true;
+  });
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Top Header & Context Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-6">
         <div>
-          <div className="flex items-center gap-2 font-mono text-xs text-cyan-400 mb-1">
-            <Cpu className="h-3.5 w-3.5" />
-            SECURITY OPERATIONS CENTER (SOC)
+          <div className="flex items-center gap-2 font-mono text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">
+            <Cpu className="h-4 w-4" />
+            Security Operations Center (SOC)
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Examiner Operations Dashboard</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Realtime exam integrity monitoring, behavioral correlation, and human review dispatch.
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+            Examiner Operations Dashboard
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Real-time candidate telemetry monitoring, behavioral anomaly correlation, and human review dispatch.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <Link
             href="/examiner/live"
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-white transition-all shadow-sm"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 shadow-xs transition-all"
           >
-            <Eye className="h-3.5 w-3.5 text-cyan-400" />
+            <Eye className="h-3.5 w-3.5 text-blue-600" />
             Live Monitoring Wall
           </Link>
           <Link
             href="/examiner/attack-lab"
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-xs font-semibold text-amber-300 transition-all shadow-sm"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-xs font-bold text-amber-800 shadow-xs transition-all"
           >
             <Terminal className="h-3.5 w-3.5" />
-            Launch Attack Lab
+            Attack Simulation Lab
           </Link>
         </div>
       </div>
 
-      {/* KPI Stats Overview */}
+      {/* Attention Triage Banner (Dashboard Attention Model) */}
+      {highRisk > 0 && (
+        <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
+          <div className="flex items-start gap-3">
+            <div className="h-9 w-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 mt-0.5">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-amber-950">
+                Action Required: {highRisk} High-Risk Examination {highRisk === 1 ? "Session" : "Sessions"} Detected
+              </h2>
+              <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                Candidate sessions exhibiting correlated behavioral anomalies (e.g. window blur + tab switches + question modification) are queued for examiner adjudication.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/examiner/investigate/at000000-0000-0000-0000-000000000002"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-colors shrink-0"
+          >
+            Review Flagship Case (Alex Mercer) <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      )}
+
+      {/* High-Density Key Operational Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 backdrop-blur-md">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-mono text-slate-400">TOTAL CANDIDATES</span>
-            <Users className="h-4 w-4 text-cyan-400" />
-          </div>
-          <div className="text-2xl font-bold text-white font-mono">{totalAttempts}</div>
-          <span className="text-[11px] text-slate-500 mt-1 block">Registered in current cohort</span>
-        </div>
+        <StatCard
+          label="Total Cohort"
+          value={totalAttempts}
+          subtitle="Registered examinees in session"
+          icon={<Users className="h-4 w-4" />}
+          highlight="default"
+        />
 
-        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 backdrop-blur-md">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-mono text-slate-400">ACTIVE IN-PROGRESS</span>
-            <Activity className="h-4 w-4 text-emerald-400" />
-          </div>
-          <div className="text-2xl font-bold text-emerald-400 font-mono">{inProgress}</div>
-          <span className="text-[11px] text-emerald-500/80 mt-1 block flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live telemetry streaming
-          </span>
-        </div>
+        <StatCard
+          label="Active In-Progress"
+          value={inProgress}
+          subtitle="Live telemetry streaming from browsers"
+          icon={<Activity className="h-4 w-4" />}
+          highlight="blue"
+        />
 
-        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 backdrop-blur-md">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-mono text-slate-400">HIGH-RISK QUEUE</span>
-            <ShieldAlert className="h-4 w-4 text-rose-400" />
-          </div>
-          <div className="text-2xl font-bold text-rose-400 font-mono">{highRisk}</div>
-          <span className="text-[11px] text-slate-500 mt-1 block">Risk index &ge; 60 / 100</span>
-        </div>
+        <StatCard
+          label="High-Risk Queue"
+          value={highRisk}
+          subtitle="Synthesized risk index >= 60 / 100"
+          icon={<ShieldAlert className="h-4 w-4" />}
+          highlight={highRisk > 0 ? "rose" : "default"}
+        />
 
-        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 backdrop-blur-md">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-mono text-slate-400">REVIEW PENDING</span>
-            <FileCheck2 className="h-4 w-4 text-amber-400" />
-          </div>
-          <div className="text-2xl font-bold text-amber-400 font-mono">{underReview}</div>
-          <span className="text-[11px] text-slate-500 mt-1 block">Requires examiner adjudication</span>
-        </div>
+        <StatCard
+          label="Pending Adjudication"
+          value={underReview}
+          subtitle="Requires human examiner determination"
+          icon={<FileCheck2 className="h-4 w-4" />}
+          highlight={underReview > 0 ? "amber" : "default"}
+        />
       </div>
 
-      {/* Realtime Live Telemetry Log Stream */}
+      {/* Realtime Telemetry Broadcast Feed */}
       {realtimeLogs.length > 0 && (
-        <div className="bg-slate-950/80 border border-cyan-500/30 rounded-2xl p-4 shadow-lg shadow-cyan-500/5">
-          <div className="flex items-center justify-between mb-3 border-b border-slate-800/80 pb-2">
-            <div className="flex items-center gap-2 text-xs font-mono text-cyan-400">
-              <Radio className="h-3.5 w-3.5 animate-pulse text-cyan-400" />
-              LIVE TELEMETRY INGESTION STREAM (SSE)
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+            <div className="flex items-center gap-2 text-xs font-mono font-bold text-blue-700">
+              <Radio className="h-3.5 w-3.5 animate-pulse text-blue-600" />
+              REALTIME TELEMETRY INGESTION STREAM (SSE + POSTGRES)
             </div>
-            <span className="text-[10px] font-mono text-slate-500">Realtime Broadcast Active</span>
+            <span className="text-[10px] font-mono text-slate-500 font-medium">
+              Synchronized & Active
+            </span>
           </div>
+
           <div className="space-y-1.5 font-mono text-xs">
             {realtimeLogs.map((log) => (
-              <div key={log.id} className="flex items-center justify-between text-slate-300 bg-slate-900/40 px-3 py-1.5 rounded-lg border border-slate-800/60">
-                <span className="text-cyan-400 font-semibold">[{log.time}] {log.type}</span>
-                <span className="text-slate-400 truncate max-w-md">
-                  Attempt: {log.payload.attempt_id?.slice(0, 10)}... | Risk: {log.payload.risk_score} | Event: {log.payload.event?.event_type || "STATUS_CHANGE"}
-                </span>
+              <div
+                key={log.id}
+                className="flex flex-col sm:flex-row sm:items-center justify-between text-slate-700 bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 gap-1 text-[11px]"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-blue-700 font-bold">[{log.time}]</span>
+                  <span className="font-semibold text-slate-900">{log.type}</span>
+                </div>
+                <div className="text-slate-500 truncate max-w-lg">
+                  Attempt: {log.payload.attempt_id?.slice(0, 8)}... | Risk: {log.payload.risk_score ?? "N/A"} | Event: {log.payload.event?.event_type || log.payload.event_type || "TELEMETRY_UPDATE"}
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Candidates & Attempts Table */}
-      <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 backdrop-blur-md shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+      {/* Candidate Sessions Roster */}
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+        {/* Table Controls & Filter Bar */}
+        <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-bold text-white">Examination Candidates & Telemetry Status</h2>
-            <p className="text-xs text-slate-400">Prioritized by explainable risk assessment and evidence confidence.</p>
+            <h2 className="text-base font-bold text-slate-900">
+              Monitored Candidate Sessions & Telemetry Roster
+            </h2>
+            <p className="text-xs text-slate-500">
+              Prioritized by explainable multi-sensor risk assessment and evidence confidence.
+            </p>
           </div>
-          <div className="text-xs font-mono text-slate-500">
-            Showing {attempts.length} attempts
+
+          <div className="flex items-center gap-3">
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="h-3.5 w-3.5 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search candidate or exam..."
+                className="pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all w-52 sm:w-64"
+              />
+            </div>
+
+            {/* Filter Dropdown */}
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+            >
+              <option value="ALL">All Sessions ({attempts.length})</option>
+              <option value="HIGH_RISK">High Risk (Score 60+)</option>
+              <option value="IN_PROGRESS">Active In-Progress</option>
+              <option value="UNDER_REVIEW">Review Pending</option>
+            </select>
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-slate-800 text-slate-400 font-mono">
-                <th className="pb-3 font-semibold">Candidate</th>
-                <th className="pb-3 font-semibold">Exam Title</th>
-                <th className="pb-3 font-semibold">Status</th>
-                <th className="pb-3 font-semibold">Risk Index</th>
-                <th className="pb-3 font-semibold">Evidence Confidence</th>
-                <th className="pb-3 font-semibold">Review Status</th>
-                <th className="pb-3 font-semibold text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {attempts.map((att) => {
-                const riskColor = getRiskColor(
-                  att.risk_score >= 80 ? "CRITICAL" : att.risk_score >= 60 ? "HIGH" : att.risk_score >= 30 ? "MODERATE" : "LOW"
-                );
-                const conf = getConfidenceBadge(att.evidence_confidence);
+        {/* Table Content */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <RefreshCw className="h-6 w-6 animate-spin text-blue-600" />
+          </div>
+        ) : filteredAttempts.length === 0 ? (
+          <div className="text-center py-16 text-slate-500">
+            <CheckCircle2 className="h-8 w-8 mx-auto text-slate-400 mb-2" />
+            <p className="font-semibold text-slate-800 text-sm">No Matching Sessions</p>
+            <p className="text-xs text-slate-500">No candidates match your current search or filter criteria.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50/60 text-slate-500 font-mono">
+                  <th className="py-3 px-5 font-semibold">Candidate</th>
+                  <th className="py-3 px-5 font-semibold">Exam Title</th>
+                  <th className="py-3 px-5 font-semibold">Session Status</th>
+                  <th className="py-3 px-5 font-semibold">Risk Index</th>
+                  <th className="py-3 px-5 font-semibold">Evidence Confidence</th>
+                  <th className="py-3 px-5 font-semibold">Review Status</th>
+                  <th className="py-3 px-5 font-semibold text-right">Adjudication</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredAttempts.map((att) => {
+                  const riskColor = getRiskColor(
+                    att.risk_score >= 80
+                      ? "CRITICAL"
+                      : att.risk_score >= 60
+                      ? "HIGH"
+                      : att.risk_score >= 30
+                      ? "MODERATE"
+                      : "LOW"
+                  );
+                  const conf = getConfidenceBadge(att.evidence_confidence);
 
-                return (
-                  <tr key={att.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-slate-200">
-                          {att.student?.full_name?.charAt(0) || "U"}
+                  return (
+                    <tr key={att.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-4 px-5">
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-slate-700 text-xs">
+                            {att.student?.full_name?.charAt(0) || "U"}
+                          </div>
+                          <div>
+                            <span className="font-bold text-slate-900 block text-sm">
+                              {att.student?.full_name}
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-mono">
+                              {att.student?.email}
+                            </span>
+                          </div>
                         </div>
-                        <div>
-                          <span className="font-semibold text-white block text-sm">{att.student?.full_name}</span>
-                          <span className="text-[11px] text-slate-500 font-mono">{att.student?.email}</span>
-                        </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    <td className="py-4 text-slate-300 font-medium max-w-[200px] truncate">
-                      {att.exam?.title || "Exam Session"}
-                    </td>
+                      <td className="py-4 px-5 text-slate-700 font-medium max-w-[200px] truncate">
+                        {att.exam?.title || "Exam Session"}
+                      </td>
 
-                    <td className="py-4">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono ${
-                          att.status === "IN_PROGRESS"
-                            ? "bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 animate-pulse"
-                            : "bg-slate-800 text-slate-300"
-                        }`}
-                      >
-                        {att.status === "IN_PROGRESS" && <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />}
-                        {att.status}
-                      </span>
-                    </td>
+                      <td className="py-4 px-5">
+                        <StatusBadge status={att.status} animate />
+                      </td>
 
-                    <td className="py-4 font-mono">
-                      <div className="flex items-center gap-2">
-                        <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${riskColor.bg} ${riskColor.text} ${riskColor.border}`}>
+                      <td className="py-4 px-5 font-mono">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border ${riskColor.bg} ${riskColor.text} ${riskColor.border}`}
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${riskColor.dot}`} />
                           {att.risk_score} / 100
                         </span>
-                      </div>
-                    </td>
+                      </td>
 
-                    <td className="py-4">
-                      <span className={`px-2 py-0.5 rounded text-[11px] font-medium border ${conf.bg} ${conf.text} ${conf.border}`}>
-                        {conf.label}
-                      </span>
-                    </td>
+                      <td className="py-4 px-5">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${conf.bg} ${conf.text} ${conf.border}`}
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${conf.dot}`} />
+                          {conf.label}
+                        </span>
+                      </td>
 
-                    <td className="py-4">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                          att.review_status === "REVIEW_RECOMMENDED"
-                            ? "bg-amber-500/10 text-amber-300 border border-amber-500/30"
-                            : att.review_status === "RESOLVED"
-                            ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
-                            : "bg-slate-800 text-slate-400"
-                        }`}
-                      >
-                        {att.review_status.replace("_", " ")}
-                      </span>
-                    </td>
+                      <td className="py-4 px-5">
+                        <StatusBadge status={att.review_status} />
+                      </td>
 
-                    <td className="py-4 text-right">
-                      <Link
-                        href={`/examiner/investigate/${att.id}`}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 text-xs font-semibold transition-all"
-                      >
-                        Investigate <ArrowRight className="h-3 w-3" />
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      <td className="py-4 px-5 text-right">
+                        <Link
+                          href={`/examiner/investigate/${att.id}`}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold transition-all shadow-xs"
+                        >
+                          Investigate <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

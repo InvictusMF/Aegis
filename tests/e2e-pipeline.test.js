@@ -30,7 +30,7 @@ test("End-to-End Pipeline: Complete integrity journey from student exam to exami
       "Content-Type": "application/json",
       Cookie: studentCookie,
     },
-    body: JSON.stringify({ exam_id: targetExam.id }),
+    body: JSON.stringify({ exam_id: targetExam.id, restart: true }),
   });
   assert.strictEqual(startRes.status, 200);
   const { attempt } = await startRes.json();
