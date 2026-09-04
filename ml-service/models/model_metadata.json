@@ -1,0 +1,31 @@
+{
+  "model_name": "IsolationForest-BehavioralAnomaly",
+  "model_version": "v1.0.0",
+  "feature_version": "v1.0",
+  "algorithm": "IsolationForest",
+  "features_expected": [
+    "focus_loss_frequency",
+    "focus_loss_duration_total",
+    "tab_switch_frequency",
+    "fullscreen_exit_count",
+    "answer_change_frequency",
+    "avg_dwell_time_seconds",
+    "dwell_time_variance",
+    "inactivity_bursts",
+    "rapid_navigation_bursts",
+    "camera_interruption_count",
+    "face_missing_frequency",
+    "multiple_faces_count",
+    "attention_deviation_frequency",
+    "copy_paste_attempts",
+    "suspicious_episode_density",
+    "tamper_chain_integrity"
+  ],
+  "n_samples": 1500,
+  "contamination": 0.08,
+  "n_detected_anomalies": 120,
+  "score_min": -0.19537385433484034,
+  "score_max": 0.19713693600203347,
+  "score_mean": 0.12955793561627968,
+  "dataset_notice": "Prototype evaluation on synthetic behavioral data."
+}
